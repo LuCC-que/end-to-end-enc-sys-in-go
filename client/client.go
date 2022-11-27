@@ -101,11 +101,12 @@ func someUsefulThings() {
 // A Go struct is like a Python or Java class - it can have attributes
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
 type User struct {
-	Username string 		`json:"Username"`
-	UserID userlib.UUID		`json:"UserID"`
-	KeyHubs map[string][]byte `json:"KeyHubs"`
-	PrivateKey []byte	`json:"PrivateKey"`
-	UserMac []byte	`json:"UserMac"`
+	Username string							`json:"Username"`
+	UserID userlib.UUID					`json:"UserID"`
+	KeyHubs map[string][]byte 	`json:"KeyHubs"`
+	FileRevoke map[string]int		`json:"FileRevoke"`
+	PrivateKey []byte						`json:"PrivateKey"`
+	UserMac []byte							`json:"UserMac"`
 
 	//don't save in dataStore
 	InterimData InterimData
@@ -120,6 +121,12 @@ type User struct {
 
 type InterimData struct{
 	MasterKey []byte
+}
+
+type File struct{
+	FileId userlib.UUID
+	Signatures []byte
+	Content []byte
 }
 
 // NOTE: The following methods have toy (insecure!) implementations.
@@ -221,13 +228,20 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	IV := userlib.RandomBytes(16)
 	cipherPriKey := userlib.SymEnc(pri_enc_key[:16], IV, json_pri_enc_key)
 
+	InterimData := InterimData{
+		master_key,
+	}
+
 	userdata := User{
 		Username: username,
 		UserID: user_uuid,
-		// KeyHubs: make(map[userlib.PublicKeyType][]byte),
+		KeyHubs: make(map[string][]byte),
+		FileRevoke: make(map[string]int),
 		PrivateKey: cipherPriKey,
 		UserMac: user_mac,
+		InterimData: InterimData,
 	}
+
 
 	err = properly_save_userData(master_key, username_hash, userdata)
 	if err != nil{
@@ -237,8 +251,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 }
 
 func GetUser(username string, password string) (userdataptr *User, err error) {
-	
-	
+		
 	//formate checking
 	format := formate_checker(username, password)
 	if !format {
@@ -297,25 +310,221 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	//attach to the userdata
 	userdata.InterimData = interimData
 
-
 	userdataptr = &userdata
 	return userdataptr, nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	userDataChange := false
 	if err != nil {
 		return err
 	}
+	_, ok := userlib.DatastoreGet(storageKey)
+	username_hash := userlib.Hash([]byte(userdata.Username))
+	filename_hash := userlib.Hash([]byte(filename))
+	var cipherContent []byte
+
+	var DSSignKey userlib.DSSignKey
+	var DSVerifyKey userlib.DSVerifyKey
+	IV := userlib.RandomBytes(16)
+
+	// encrypt the data
 	contentBytes, err := json.Marshal(content)
-	if err != nil {
-		return err
+	if ok{
+		revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
+		description := append([]byte("/contentEncryption/"), revokeCounter...)
+		// userlib.DebugMsg("This is the description, of OK", string(description))
+		contentKeyPurpose := append(append(username_hash, filename_hash...),  description...)
+		// userlib.DebugMsg("This is the contentKeyPurpose, of OK", string(contentKeyPurpose))
+		contentKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(1)"))
+		}
+		cipherContent = userlib.SymEnc(contentKey[:16], IV, contentBytes)
+		// userlib.DebugMsg("This is the content key, of OK", string(contentKey))
+		// get the DSvKey
+		publishName := append(append(username_hash, "/"...), filename_hash...)
+		DSVerifyKey, ok:= userlib.KeystoreGet(string(publishName))
+		if !ok {
+			return errors.New(strings.Title("Can't find the key"))
+		}
+
+		// get the DSsKey
+		json_pub_key, err := json.Marshal(DSVerifyKey)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to marsh pub key)"))
+		}
+
+		//decrpt the pri_key
+		cipher_json_pri_key := userdata.KeyHubs[string(json_pub_key)]
+		priKeyPurpose := append(append(username_hash, filename_hash...),  "/privateKeyEnc"...)
+		key_of_priKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], priKeyPurpose)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to HashKDP pri key(1)"))
+		}
+
+		json_pri_key := userlib.SymDec(key_of_priKey[:16], cipher_json_pri_key)
+
+		// unmarshal the DSskey
+		err = json.Unmarshal(json_pri_key, &DSSignKey)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to unmarsh priv key)"))
+		}
+
+	}else{
+		description := append([]byte("/contentEncryption/revokeCounter"), byte(0))
+		// userlib.DebugMsg("This is the description, of not OK", string(description))
+		contentKeyPurpose := append(append(username_hash, filename_hash...), description...)
+		// userlib.DebugMsg("This is the contentKeyPurpose, of not OK", string(contentKeyPurpose))
+		contentKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(2)"))
+		}
+		//userlib.DebugMsg("This is the content key, of not OK", string(contentKey))
+		cipherContent = userlib.SymEnc(contentKey[:16], IV, contentBytes)
+		userdata.FileRevoke[string(filename_hash)] = 0
+		
+		DSSignKey, DSVerifyKey, err = userlib.DSKeyGen()
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen Signatures(1)"))
+		}
+
+		// publish the new pub key
+		publishName := append(append(username_hash, "/"...), filename_hash...)
+		userlib.KeystoreSet(string(publishName), DSVerifyKey)
+		//add to the user data
+		json_pub_key, err := json.Marshal(DSVerifyKey)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to marsh pub key)"))
+		}
+		json_pri_key, err := json.Marshal(DSSignKey)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to marsh pri key)"))
+		}
+
+		//encrypt the private key
+		priKeyPurpose := append(append(username_hash, filename_hash...),  "/privateKeyEnc"...)
+		key_of_priKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], priKeyPurpose)
+		if err != nil{
+			return errors.New(strings.Title("Internal Error[StoreFile]: Fail to HashKDP pri key)"))
+		}
+
+		IV = userlib.RandomBytes(16)
+		cipher_pri_key := userlib.SymEnc(key_of_priKey[:16], IV, json_pri_key)
+
+		userdata.KeyHubs[string(json_pub_key)] = cipher_pri_key
+		userDataChange = true
 	}
-	userlib.DatastoreSet(storageKey, contentBytes)
+
+	//make a Signatures
+	Signatures, err := userlib.DSSign(DSSignKey, cipherContent)
+	if err != nil{
+		return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen Signatures(2)"))
+	}
+
+	//make the file data	
+	fileData := File{
+		FileId: storageKey,
+		Signatures: Signatures,
+		Content: cipherContent,
+	}
+
+	//make the cipher file data and save it
+	json_fileData, err := json.Marshal(fileData)
+	if err != nil{
+		return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen Marshal"))
+	}
+	revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
+	description := append([]byte("/dataEncryption/"), revokeCounter...)
+	dataKeyPurpose := append(append(username_hash, filename_hash...),  description...)
+	IV = userlib.RandomBytes(16)
+	dataKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], dataKeyPurpose)
+	if err != nil{
+		return errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(3)"))
+	}
+	cipherFileData := userlib.SymEnc(dataKey[:16], IV, json_fileData)
+	userlib.DatastoreSet(storageKey, cipherFileData)
+
+	
+
+	// save the data
+	if userDataChange{
+		properly_save_userData(userdata.InterimData.MasterKey, username_hash, *userdata)
+	}
 	return
 }
 
 func (userdata *User) AppendToFile(filename string, content []byte) error {
+	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+	if err != nil {
+		return err
+	}
+
+	username_hash := userlib.Hash([]byte(userdata.Username))
+	filename_hash := userlib.Hash([]byte(filename))
+
+	//make two keys, contingenally
+	var dataKey []byte
+	var contentKey []byte
+	var cipher_json_fileData []byte
+	var fileData File
+	cipher_json_fileData, ok := userlib.DatastoreGet(storageKey)
+	if !ok {
+		return errors.New(strings.ToTitle("[AppendToFile]: file doesn't exist"))
+	}else{
+		revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
+		data_description := append([]byte("/dataEncryption/"), revokeCounter...)
+		dataKeyPurpose := append(append(username_hash, filename_hash...),  data_description...)
+		dataKey, err= userlib.HashKDF(userdata.InterimData.MasterKey[:16], dataKeyPurpose)
+		if err != nil{
+			return errors.New(strings.ToTitle("[AppendToFile]: fail to HashKDF(1)"))
+		}
+		
+		content_description := append([]byte("/contentEncryption/"), revokeCounter...)
+		contentKeyPurpose := append(append(username_hash, filename_hash...),  content_description...)
+		contentKey, err= userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
+		userlib.DebugMsg("This is the content key, of not append store", string(contentKey))
+		if err != nil{
+			return errors.New(strings.ToTitle("[AppendToFile]: fail to HashKDF(2)"))
+		}
+
+	}
+	
+	//check if is the owner or not then do the enc or dec
+	// make a key to decrpt the data
+	json_fileData := userlib.SymDec(dataKey[:16], cipher_json_fileData)
+	err = json.Unmarshal(json_fileData, &fileData)
+	if err != nil{
+		return errors.New(strings.ToTitle("[AppendToFile]: fail to unmarshal"))
+	}
+
+	//check signature
+	publishName := append(append(username_hash, "/"...), filename_hash...)
+	DSVerifyKey, ok:= userlib.KeystoreGet(string(publishName))
+	if !ok {
+		return errors.New(strings.ToTitle("[AppendToFile]: Can't find key in keystore"))
+	}
+	err = userlib.DSVerify(DSVerifyKey, fileData.Content, fileData.Signatures)
+	if err != nil{
+		return errors.New(strings.ToTitle("File doesn't match, data breach may happen"))
+	}
+
+	//decrpt the content
+	json_plainContent := userlib.SymDec(contentKey[:16], fileData.Content)
+
+	var plainContent []byte
+
+	
+	err = json.Unmarshal(json_plainContent, &plainContent)
+
+	if err != nil{
+		return errors.New(strings.ToTitle("[AppendToFile] Fail to unmarshal the content"))
+	}
+	//append to the end of content
+	plainContent = append(plainContent, content...)
+
+	userdata.StoreFile(filename, plainContent)
 	return nil
 }
 
@@ -324,11 +533,36 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	dataJSON, ok := userlib.DatastoreGet(storageKey)
+
+	cipher_dataJSON, ok := userlib.DatastoreGet(storageKey)
 	if !ok {
 		return nil, errors.New(strings.ToTitle("file not found"))
 	}
-	err = json.Unmarshal(dataJSON, &content)
+
+	username_hash := userlib.Hash([]byte(userdata.Username))
+	filename_hash := userlib.Hash([]byte(filename))
+	revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
+	descriptionData := append([]byte("/dataEncryption/"), revokeCounter...)
+	dataKeyPurpose := append(append(username_hash, filename_hash...),  descriptionData...)
+	dataKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], dataKeyPurpose)
+	if err != nil{
+		return nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(3)"))
+	}
+
+	//decrypt and place in struct
+	var fileData File
+	err = json.Unmarshal(userlib.SymDec(dataKey[:16], cipher_dataJSON), &fileData)
+	if err != nil {
+		return nil, errors.New("Internal error[LoadFile]: Unable unmarsharl fileData")
+	}
+
+	//decrypt the content and return it 
+	descriptionContent := append([]byte("/contentEncryption/"), revokeCounter...)
+	contentKeyPurpose := append(append(username_hash, filename_hash...),  descriptionContent...)
+	contentKey, err:= userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
+
+	json_content := userlib.SymDec(contentKey[:16], fileData.Content)
+	json.Unmarshal(json_content, &content)
 	return content, err
 }
 
