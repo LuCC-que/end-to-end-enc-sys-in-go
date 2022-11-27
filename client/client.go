@@ -6,6 +6,7 @@ package client
 // may break the autograder!
 
 import (
+	"bytes"
 	"encoding/json"
 
 	userlib "github.com/cs161-staff/project2-userlib"
@@ -100,8 +101,14 @@ func someUsefulThings() {
 // A Go struct is like a Python or Java class - it can have attributes
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
 type User struct {
-	Username string
-	Password string
+	Username string 		`json:"Username"`
+	UserID userlib.UUID		`json:"UserID"`
+	KeyHubs map[string][]byte `json:"KeyHubs"`
+	PrivateKey []byte	`json:"PrivateKey"`
+	UserMac []byte	`json:"UserMac"`
+
+	//don't save in dataStore
+	InterimData InterimData
 
 	// You can add other attributes here if you want! But note that in order for attributes to
 	// be included when this struct is serialized to/from JSON, they must be capitalized.
@@ -111,16 +118,186 @@ type User struct {
 	// begins with a lowercase letter).
 }
 
+type InterimData struct{
+	MasterKey []byte
+}
+
 // NOTE: The following methods have toy (insecure!) implementations.
 
+func formate_checker(username string, password string) (ok bool){
+
+	if(username == "" || len(username) == 0 || 
+			password == "" || len(password) == 0){
+		return false
+	}
+
+	return true
+
+}
+
+func properly_save_userData(master_key []byte, username_hash []byte, saveble User) (err error){
+
+	//remove the interimData, give a empty one to it
+	saveble.InterimData = InterimData{}
+
+	json_userdata, err := json.Marshal(saveble)
+	if err != nil{
+		return errors.New(strings.ToTitle("Internel error: Fail to generate Mashal for json_userdata"))
+	}
+
+	// encrypt the data store
+	purpose2 := append(username_hash, "/encryptDataStroage"...)
+	enc_data_Store_key, err := userlib.HashKDF(master_key[:16], purpose2)
+	if err != nil{
+		return errors.New(strings.ToTitle("Internel error[HashKDF]: Fail to generate enc_data_Store_key"))
+	}
+
+	
+	IV := userlib.RandomBytes(16)
+	cipherUserdata := userlib.SymEnc(enc_data_Store_key[:16], IV, json_userdata)
+
+	//save to the data store
+	userlib.DatastoreSet(saveble.UserID, cipherUserdata)
+
+	return nil
+
+}
 func InitUser(username string, password string) (userdataptr *User, err error) {
-	var userdata User
-	userdata.Username = username
+	
+	//formate checking
+	format := formate_checker(username, password)
+	if !format {
+		return nil, errors.New(strings.ToTitle("username or password can't be empty"))
+	}
+
+	//generate name hash and uuid
+	username_hash := userlib.Hash([]byte(username))
+	user_uuid, err:= uuid.FromBytes(username_hash[:16])
+	if err!= nil{
+		return nil, errors.New(strings.ToTitle("Internel error: Fail to create uuid"))
+	}
+
+	// make sure there is no same user name
+	_, ok := userlib.DatastoreGet(user_uuid)
+
+	if ok{
+		return nil, errors.New(strings.ToTitle("username exist, choose another one"))
+	}
+
+	//create a password has and drive a key from it
+	password_hash := userlib.Hash([]byte(password))
+	master_key := userlib.Argon2Key(password_hash, username_hash, 64)
+
+	//combine username hash and password hash gen a user MAC code
+	combine_name_password := append(username_hash, password_hash...)
+	user_mac, err:= userlib.HMACEval(master_key[:16], combine_name_password)
+	if err != nil {
+		return nil, errors.New(strings.ToTitle("Internel error[init]: Fail to create user MAC"))
+	}
+	
+	// create pub and pri key
+	PKEEncKey, PKEDecKey, err := userlib.PKEKeyGen()
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Internel error: Fail to generate PKEkeys"))
+	}
+
+	//publish the personal public key
+	userlib.KeystoreSet(username, PKEEncKey)
+	
+	// gen a key from master key for privateKey
+	purpose := append(username_hash, "/privateKey"...)
+	pri_enc_key, err := userlib.HashKDF(master_key[:16], purpose)
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Internel error[HashKDF, init]: Fail to generate pri_enc_key"))
+	}
+
+	//turn the prikey into Json
+	json_pri_enc_key, err := json.Marshal(PKEDecKey)
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Internel error: Fail to generate Mashal for json_pri_enc_key"))
+	}
+
+	//encrypt it and save it to the userdata struct
+	IV := userlib.RandomBytes(16)
+	cipherPriKey := userlib.SymEnc(pri_enc_key[:16], IV, json_pri_enc_key)
+
+	userdata := User{
+		Username: username,
+		UserID: user_uuid,
+		// KeyHubs: make(map[userlib.PublicKeyType][]byte),
+		PrivateKey: cipherPriKey,
+		UserMac: user_mac,
+	}
+
+	err = properly_save_userData(master_key, username_hash, userdata)
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Fail to save the data in to th data store"))
+	}
 	return &userdata, nil
 }
 
 func GetUser(username string, password string) (userdataptr *User, err error) {
+	
+	
+	//formate checking
+	format := formate_checker(username, password)
+	if !format {
+		return nil, errors.New(strings.ToTitle("username or password can't be empty"))
+	}
+
+	//generate name hash and uuid
+	username_hash := userlib.Hash([]byte(username))
+	user_uuid, err:= uuid.FromBytes(username_hash[:16])
+	if err!= nil{
+		return nil, errors.New(strings.ToTitle("Internel error: Fail to create uuid"))
+	}
+
+	// make sure there is no same user name
+	dataJSONCipher, ok := userlib.DatastoreGet(user_uuid)
+
+	if !ok{
+		return nil, errors.New(strings.ToTitle("User doesn't exist"))
+	}
+
+	//create a password has and drive a key from it
+	password_hash := userlib.Hash([]byte(password))
+	master_key := userlib.Argon2Key(password_hash, username_hash, 64)
+
+	// decrypt the data store and make a proper data stor
+	purpose2 := append(username_hash, "/encryptDataStroage"...)
+	data_Store_key, err := userlib.HashKDF(master_key[:16], purpose2)
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Internel error[HashKDF]: Fail to generate data_Store_key"))
+	}
+	dataJSONPlain := userlib.SymDec(data_Store_key[:16], dataJSONCipher)
 	var userdata User
+	err = json.Unmarshal(dataJSONPlain, &userdata)
+	if err != nil{
+		return nil, errors.New(strings.ToTitle("Internel error: Saved data compromised or password incorrect"))
+	}
+
+	//combine username hash and password hash gen a user MAC code
+	//and the compare the MACs
+	combine_name_password := append(username_hash, password_hash...)
+	valid_user_Mac, err :=  userlib.HMACEval(master_key[:16], combine_name_password)
+	if err != nil {
+		return nil, errors.New(strings.ToTitle("Internel error: Fail to create user MAC"))
+	}
+	res := bytes.Compare(valid_user_Mac, userdata.UserMac)
+	if res != 0{
+		return nil, errors.New(strings.ToTitle("Password or username incorrect"))
+
+	}
+
+	//make interim data
+	interimData := InterimData{
+		master_key,
+	}	
+	
+	//attach to the userdata
+	userdata.InterimData = interimData
+
+
 	userdataptr = &userdata
 	return userdataptr, nil
 }
