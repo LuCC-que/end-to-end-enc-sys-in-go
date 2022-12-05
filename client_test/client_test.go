@@ -138,12 +138,12 @@ var _ = Describe("Client Tests", func() {
 			invite, err := aliceLaptop.CreateInvitation(aliceFile, "bob")
 			Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Bob accepting invite from Alice under filename %s.", bobFile)
-			err = bob.AcceptInvitation("alice", invite, bobFile)
+			userlib.DebugMsg("Bob accepting invite from Alice under filename %s.", aliceFile)
+			err = bob.AcceptInvitation("alice", invite, aliceFile)
 			Expect(err).To(BeNil())
 
-			userlib.DebugMsg("Bob appending to file %s, content: %s", bobFile, contentTwo)
-			err = bob.AppendToFile(bobFile, []byte(contentTwo))
+			userlib.DebugMsg("Bob appending to file %s, content: %s", aliceFile, contentTwo)
+			err = bob.AppendToFile(aliceFile, []byte(contentTwo))
 			Expect(err).To(BeNil())
 
 			userlib.DebugMsg("aliceDesktop appending to file %s, content: %s", aliceFile, contentThree)
@@ -161,7 +161,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 
 			userlib.DebugMsg("Checking that Bob sees expected file data.")
-			data, err = bob.LoadFile(bobFile)
+			data, err = bob.LoadFile(aliceFile)
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
 
