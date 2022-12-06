@@ -66,8 +66,8 @@ var _ = Describe("Client Tests", func() {
 
 	// A bunch of filenames that may be useful.
 	aliceFile := "aliceFile.txt"
-	bobFile := "bobFile.txt"
-	charlesFile := "charlesFile.txt"
+	// bobFile := "bobFile.txt"
+	// charlesFile := "charlesFile.txt"
 	// dorisFile := "dorisFile.txt"
 	// eveFile := "eveFile.txt"
 	// frankFile := "frankFile.txt"
@@ -229,17 +229,17 @@ var _ = Describe("Client Tests", func() {
 			Expect(data).To(Equal([]byte(contentOne)))
 
 			userlib.DebugMsg("Checking that Bob/Charles lost access to the file.")
-			_, err = bob.LoadFile(bobFile)
+			_, err = bob.LoadFile(aliceFile)
 			Expect(err).ToNot(BeNil())
 
-			_, err = charles.LoadFile(charlesFile)
+			_, err = charles.LoadFile(aliceFile)
 			Expect(err).ToNot(BeNil())
 
 			userlib.DebugMsg("Checking that the revoked users cannot append to the file.")
-			err = bob.AppendToFile(bobFile, []byte(contentTwo))
+			err = bob.AppendToFile(aliceFile, []byte(contentTwo))
 			Expect(err).ToNot(BeNil())
 
-			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
+			err = charles.AppendToFile(aliceFile, []byte(contentTwo))
 			Expect(err).ToNot(BeNil())
 		})
 

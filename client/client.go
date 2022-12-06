@@ -1029,6 +1029,6 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 		username_hash, 
 		*userdata, userdata.InterimData.SignKey)
 	
-
+	//make other users accessiable?
 	return nil
 }
