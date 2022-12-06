@@ -950,21 +950,8 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	//enc the block key with the master key
 	IV := userlib.RandomBytes(16)
 	cipherBlockKey = userlib.SymEnc(userdata.InterimData.MasterKey[:16], IV, blockKey)
+
 	//make the data enc key
-	// dataEncKeyPurpose := []byte("data-key-enc")
-	// dataEncKeyPurposeHash := userlib.Hash(dataEncKeyPurpose)
-	// data_enc_key, err := userlib.HashKDF(blockKey[:16], dataEncKeyPurposeHash)
-
-	// //make the content enc key
-	// contentEncPurpose := []byte("content-key-enc")
-	// contentEncPurposeHash := userlib.Hash(contentEncPurpose)
-	// content_enc_key, err := userlib.HashKDF(blockKey[:16], contentEncPurposeHash)
-
-	// //make the key
-	// dataKey := userlib.SymDec(data_enc_key[:16], Invitation.Data_key)
-	// contentKey := userlib.SymDec(content_enc_key[:16], Invitation.Content_key)
-
-	// senderUsername_Hash := userlib.Hash([]byte(senderUsername))
 	publishName := append(append(filename_hash, "/"...), username_hash...)
 	pushlishName_dataKey := append(publishName, "dataKey"...)
 	pushlishName_contenKey := append(publishName, "contentKey"...)
@@ -1012,5 +999,36 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 }
 
 func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+
+	username_hash := userlib.Hash([]byte(userdata.Username))
+	filename_hash := userlib.Hash([]byte(filename))
+	publishName := append(append(username_hash, "/"...), filename_hash...)
+	_, ok := userlib.KeystoreGet(string(publishName))
+	if !ok {
+		return errors.New(strings.Title("File dones't belong to current user"))
+	}
+
+	// check if it is the real reciver
+	if _, ok := userdata.ShareUser[recipientUsername]; !ok{
+		return errors.New(strings.Title("is no the share user"))
+	}
+
+	content, err:= userdata.LoadFile(filename)
+	if err != nil{
+		return errors.New(strings.Title("Can't load file"))
+	}
+
+	//reset the revoke
+	userdata.FileRevoke[string(filename_hash)] += 1
+
+	//reset the file, as the revoke change, the key will change as well
+	userdata.StoreFile(filename, content)
+
+	//save the user data
+	properly_save_userData(userdata.InterimData.MasterKey, 
+		username_hash, 
+		*userdata, userdata.InterimData.SignKey)
+	
+
 	return nil
 }
