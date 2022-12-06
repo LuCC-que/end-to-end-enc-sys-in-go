@@ -587,7 +587,7 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 			content_description := append([]byte("/contentEncryption/"), revokeCounter...)
 			contentKeyPurpose := append(append(username_hash, filename_hash...), content_description...)
 			contentKey, err = userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
-			userlib.DebugMsg("This is the content key, of not append store", string(contentKey))
+			// userlib.DebugMsg("This is the content key, of not append store", string(contentKey))
 			if err != nil {
 				return errors.New(strings.ToTitle("[AppendToFile]: fail to HashKDF(2)"))
 			}
@@ -749,61 +749,90 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 	}
 
 	_, ok := userlib.DatastoreGet(file_id)
-	if !ok{
+	if !ok {
 		return uuid.Nil, errors.New(strings.Title("Internal error[CreateInvitation]: no such a file"))
 	}
 
-
 	PKYEncKey, ok := userlib.KeystoreGet(recipientUsername)
-
 	if !ok {
 		return uuid.Nil, errors.New(strings.Title("Internal error[CreateInvitation]: recipientUsername don't exsit"))
 	}
-
-
-
-	// recipitent_id, err := uuid.FromBytes(recipitent_hash[:16])
-	if err != nil {
-		return uuid.Nil, errors.New(strings.Title("Internal error[CreateInvitation]: fail to generate recipitent_id"))
-	}
-
-
 
 	// assign name to Invitation
 	Invitation_name := userdata.Username + "/" + filename + "/" + recipientUsername
 	Invitation_name_hash := userlib.Hash([]byte(Invitation_name))
 	Invitation_id, err := uuid.FromBytes(Invitation_name_hash[:16])
-
 	if err != nil {
 		return uuid.Nil, errors.New(strings.Title("Internal error[CreateInvitation]: fail to generate Invitation_id"))
 	}
 
-	//make data key
-	revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
-	description := append([]byte("/dataEncryption/"), revokeCounter...)
-	dataKeyPurpose := append(append(username_hash, filename_hash...), description...)
-	dataKey, err := userlib.HashKDF(userdata.InterimData.MasterKey[:16], dataKeyPurpose)
-	if err != nil {
-		return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(1)"))
-	}
+	publishName := append(append(username_hash, "/"...), filename_hash...)
+	_, ok = userlib.KeystoreGet(string(publishName))
 
-	//make content key
-	description = append([]byte("/contentEncryption/"), revokeCounter...)
-	// userlib.DebugMsg("This is the description, of OK", string(description))
-	contentKeyPurpose := append(append(username_hash, filename_hash...), description...)
-	// userlib.DebugMsg("This is the contentKeyPurpose, of OK", string(contentKeyPurpose))
-	contentKey, err := userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
-	if err != nil {
-		return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(2)"))
-	}
+	var dataKey []byte
+	var contentKey []byte
+	var blockKey []byte
+	if ok {
+		//make data key
+		revokeCounter := append([]byte("revokeCounter"), byte(userdata.FileRevoke[string(filename_hash)]))
+		description := append([]byte("/dataEncryption/"), revokeCounter...)
+		dataKeyPurpose := append(append(username_hash, filename_hash...), description...)
+		dataKey, err = userlib.HashKDF(userdata.InterimData.MasterKey[:16], dataKeyPurpose)
+		if err != nil {
+			return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(1)"))
+		}
 
-	//make a block key
-	description = append([]byte("/block/"), revokeCounter...)
-	blockKeyPurpose := append(append(username_hash, filename_hash...), description...)
-	blockKeyPurposeHash := userlib.Hash(blockKeyPurpose)
-	blockKey, err := userlib.HashKDF(userdata.InterimData.MasterKey[:16], blockKeyPurposeHash)
-	if err != nil {
-		return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(2)"))
+		//make content key
+		description = append([]byte("/contentEncryption/"), revokeCounter...)
+		// userlib.DebugMsg("This is the description, of OK", string(description))
+		contentKeyPurpose := append(append(username_hash, filename_hash...), description...)
+		// userlib.DebugMsg("This is the contentKeyPurpose, of OK", string(contentKeyPurpose))
+		contentKey, err = userlib.HashKDF(userdata.InterimData.MasterKey[:16], contentKeyPurpose)
+		if err != nil {
+			return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(2)"))
+		}
+
+		//make a block key
+		description = append([]byte("/block/"), revokeCounter...)
+		blockKeyPurpose := append(append(username_hash, filename_hash...), description...)
+		blockKeyPurposeHash := userlib.Hash(blockKeyPurpose)
+		blockKey, err = userlib.HashKDF(userdata.InterimData.MasterKey[:16], blockKeyPurposeHash)
+		if err != nil {
+			return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(2)"))
+		}
+
+	}else{
+		//shared users
+
+			publishName = append(append(filename_hash, "/"...), username_hash...)
+			_, ok = userlib.KeystoreGet(string(publishName))
+
+			pushlishName_dataKey := append(publishName, "dataKey"...)
+			pushlishName_contenKey := append(publishName, "contentKey"...)
+			pushlishName_blockKey := append(publishName, "blockKey"...)
+
+			//make block key
+			blockKey = userlib.SymDec(userdata.InterimData.MasterKey[:16],
+				userdata.KeyHubs[string(pushlishName_blockKey)])
+
+			//make the data enc key
+			dataEncKeyPurpose := []byte("data-key-enc")
+			dataEncKeyPurposeHash := userlib.Hash(dataEncKeyPurpose)
+			data_enc_key, err := userlib.HashKDF(blockKey[:16], dataEncKeyPurposeHash)
+			if err != nil {
+				return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(4)"))
+			}
+			// //make the content enc key
+			contentEncPurpose := []byte("content-key-enc")
+			contentEncPurposeHash := userlib.Hash(contentEncPurpose)
+			content_enc_key, err := userlib.HashKDF(blockKey[:16], contentEncPurposeHash)
+			if err != nil {
+				return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(5)"))
+			}
+			// make the data key and contentKey
+			dataKey = userlib.SymDec(data_enc_key[:16], userdata.KeyHubs[string(pushlishName_dataKey)])
+			contentKey = userlib.SymDec(content_enc_key[:16], userdata.KeyHubs[string(pushlishName_contenKey)])
+
 	}
 
 	//derive data enc key
@@ -879,7 +908,7 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	}
 
 	_, ok := userlib.DatastoreGet(file_id)
-	if !ok{
+	if !ok {
 		return errors.New(strings.Title("Internal error[AcceptInvitation]: no such a file"))
 	}
 
@@ -917,8 +946,6 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	if err != nil {
 		return errors.New(strings.ToTitle("[AcceptInvitation]: Fail to unmarshal"))
 	}
-
-
 
 	//enc the block key with the master key
 	IV := userlib.RandomBytes(16)
