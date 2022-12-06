@@ -801,37 +801,37 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, errors.New(strings.Title("Internal Error[CreateInvitation]: Fail to gen HashKDF(2)"))
 		}
 
-	}else{
+	} else {
 		//shared users
 
-			publishName = append(append(filename_hash, "/"...), username_hash...)
-			_, ok = userlib.KeystoreGet(string(publishName))
+		publishName = append(append(filename_hash, "/"...), username_hash...)
+		_, ok = userlib.KeystoreGet(string(publishName))
 
-			pushlishName_dataKey := append(publishName, "dataKey"...)
-			pushlishName_contenKey := append(publishName, "contentKey"...)
-			pushlishName_blockKey := append(publishName, "blockKey"...)
+		pushlishName_dataKey := append(publishName, "dataKey"...)
+		pushlishName_contenKey := append(publishName, "contentKey"...)
+		pushlishName_blockKey := append(publishName, "blockKey"...)
 
-			//make block key
-			blockKey = userlib.SymDec(userdata.InterimData.MasterKey[:16],
-				userdata.KeyHubs[string(pushlishName_blockKey)])
+		//make block key
+		blockKey = userlib.SymDec(userdata.InterimData.MasterKey[:16],
+			userdata.KeyHubs[string(pushlishName_blockKey)])
 
-			//make the data enc key
-			dataEncKeyPurpose := []byte("data-key-enc")
-			dataEncKeyPurposeHash := userlib.Hash(dataEncKeyPurpose)
-			data_enc_key, err := userlib.HashKDF(blockKey[:16], dataEncKeyPurposeHash)
-			if err != nil {
-				return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(4)"))
-			}
-			// //make the content enc key
-			contentEncPurpose := []byte("content-key-enc")
-			contentEncPurposeHash := userlib.Hash(contentEncPurpose)
-			content_enc_key, err := userlib.HashKDF(blockKey[:16], contentEncPurposeHash)
-			if err != nil {
-				return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(5)"))
-			}
-			// make the data key and contentKey
-			dataKey = userlib.SymDec(data_enc_key[:16], userdata.KeyHubs[string(pushlishName_dataKey)])
-			contentKey = userlib.SymDec(content_enc_key[:16], userdata.KeyHubs[string(pushlishName_contenKey)])
+		//make the data enc key
+		dataEncKeyPurpose := []byte("data-key-enc")
+		dataEncKeyPurposeHash := userlib.Hash(dataEncKeyPurpose)
+		data_enc_key, err := userlib.HashKDF(blockKey[:16], dataEncKeyPurposeHash)
+		if err != nil {
+			return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(4)"))
+		}
+		// //make the content enc key
+		contentEncPurpose := []byte("content-key-enc")
+		contentEncPurposeHash := userlib.Hash(contentEncPurpose)
+		content_enc_key, err := userlib.HashKDF(blockKey[:16], contentEncPurposeHash)
+		if err != nil {
+			return uuid.Nil, errors.New(strings.Title("Internal Error[StoreFile]: Fail to gen HashKDF(5)"))
+		}
+		// make the data key and contentKey
+		dataKey = userlib.SymDec(data_enc_key[:16], userdata.KeyHubs[string(pushlishName_dataKey)])
+		contentKey = userlib.SymDec(content_enc_key[:16], userdata.KeyHubs[string(pushlishName_contenKey)])
 
 	}
 
@@ -1009,12 +1009,12 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	}
 
 	// check if it is the real reciver
-	if _, ok := userdata.ShareUser[recipientUsername]; !ok{
+	if _, ok := userdata.ShareUser[recipientUsername]; !ok {
 		return errors.New(strings.Title("is no the share user"))
 	}
 
-	content, err:= userdata.LoadFile(filename)
-	if err != nil{
+	content, err := userdata.LoadFile(filename)
+	if err != nil {
 		return errors.New(strings.Title("Can't load file"))
 	}
 
@@ -1025,10 +1025,10 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	userdata.StoreFile(filename, content)
 
 	//save the user data
-	properly_save_userData(userdata.InterimData.MasterKey, 
-		username_hash, 
+	properly_save_userData(userdata.InterimData.MasterKey,
+		username_hash,
 		*userdata, userdata.InterimData.SignKey)
-	
+
 	//make other users accessiable?
 	return nil
 }
